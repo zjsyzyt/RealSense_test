@@ -91,35 +91,36 @@ void threechannel2gray(Mat &img, Mat &grayimg) {
 			uchar b = img.at<Vec3b>(i, j)[0];//注意rgb的存放顺序
 			uchar g = img.at<Vec3b>(i, j)[1];
 			uchar r = img.at<Vec3b>(i, j)[2];
-			grayimg.at<uchar>(i, j) = r * 0.299 + g * 0.587 + b * 0.114;//公式
+			//grayimg.at<uchar>(i, j) = r * 0.299 + g * 0.587 + b * 0.114;//公式
+			grayimg.at<uchar>(i, j) = r * 1.000 + g * 0.000 + b * 0.000;//只提取红色通道的值，即距离最近的。
 		}
 	}
 }
 
 //定义了一个获取深度图障碍物的函数，返回一个vector
-vector< vector<Point> > find_obstacle(Mat &depth, int thresh = 150, int max_thresh = 255, int area = 500) {
+vector< vector<Point> > find_obstacle(Mat &depth, int thresh = 127, int max_thresh = 255, int area = 1000) {
 	Mat dep;
 	depth.copyTo(dep);  //CopyTo函数，将深度图depth复制到新的dep中去
-	mask_depth(depth, dep, 1000);//二值化
-	dep.convertTo(dep, CV_8UC3, 1.0 / 4);  //convertTo函数，将数据的类型进行了一些变化
+	imshow("depth", depth);
+	mask_depth(depth, dep, 255);//二值化，距离大于临界值的设为0，即黑色的；此处阈值为255，说明没用
+	//imshow("dep1", dep);
+	dep.convertTo(dep, CV_8UC3, 255);  //convertTo函数，将数据的类型进行了一些变化//参数调得越小，图像越暗
 	//dep.convertTo(dep, CV_8UC1, 255);  //convertTo函数，将数据的类型进行了一些变化
-	imshow("depth", dep);
-	Mat element = getStructuringElement(MORPH_RECT, Size(15, 15));  //矩形核，核的大小可适当调整
-	Mat out;
+	//imshow("dep2", dep);
+	
+	////进行开操作，去除小的物体（噪点），结 RPH_RECT, Size(15, 15));  //矩形核，核的大小可适当调整
+	//Mat out;
+	//morphologyEx(dep, out, MORPH_OPEN, element);
+	////dilate(dhc, out, element);
+	//imshow("opencv", out);//显示开操作效果图
 
-	//进行开操作，去除小的物体（噪点），结果输出给out
-	morphologyEx(dep, out, MORPH_OPEN, element);
-	//dilate(dhc, out, element);
-
-//显示效果图
-	imshow("opencv", out);
 	Mat src_copy = dep.clone();//复制
 	Mat threshold_output;
 	vector<vector<Point> > contours;//绘制矩形框，二维浮点型向量，将来会存储找到的边界的（x,y）坐标
 	vector<Vec4i> hierarchy;//层次结构，等级；vector中放入4维int向量
 	RNG rng(12345);//构造随机数，
-	//对图像进行二值化
-	threshold(dep, threshold_output, thresh, 255, THRESH_BINARY);
+	//对彩色图像进行二值化
+	//threshold(dep, threshold_output, thresh, 255, THRESH_BINARY);//255是图像中的最大值，该函数直接对彩色图像进行了二值化，是允许的
 	//imshow("threshold_output", threshold_output);
 	//mask_depth(src, threshold_output);
 
@@ -127,10 +128,21 @@ vector< vector<Point> > find_obstacle(Mat &depth, int thresh = 150, int max_thre
 	//三通道图转化为单通道灰度图
 	vector<Mat> channels;//三通道图转化为单通道图
 	split(dep, channels);
-	Mat threshold_output_gray=Mat::zeros(threshold_output.size(), CV_8UC1);//构造mat矩阵单通道用于存放灰度图;
-	threechannel2gray(threshold_output, threshold_output_gray);
+	Mat threshold_output_gray=Mat::zeros(dep.size(), CV_8UC1);//构造mat矩阵单通道用于存放灰度图;
+	threechannel2gray(dep, threshold_output_gray);//目前只提取红色通道，即只识别近处物体
+	imshow("threshold_output_red", threshold_output_gray);
+	Mat threshold_output_binary;
+	//转化成单通道灰度图后，对单通道灰度图进行二值化
+	threshold(threshold_output_gray, threshold_output_binary, thresh, 255, THRESH_BINARY);
+	//障碍物是白色的，带有黑色的噪点，因此进行闭操作，去除小的物体（噪点），结果输出给output
+	Mat element = getStructuringElement(MORPH_RECT, Size(15, 15));  //矩形核，核的大小可适当调整
+	Mat medium;
+	Mat output;
+	morphologyEx(threshold_output_binary, medium, MORPH_CLOSE, element);
+	morphologyEx(medium, output, MORPH_OPEN, element);
+	imshow("output", output);//显示开闭操作效果图
 
-	findContours(threshold_output_gray, contours, hierarchy, RETR_TREE, CHAIN_APPROX_SIMPLE, Point(0, 0));
+	findContours(output, contours, hierarchy, RETR_TREE, CHAIN_APPROX_SIMPLE, Point(0, 0));
 	//threshold_output是输入图像，
 	//contours-输出轮廓的矩形框
 	//RETR_TREE 检索所有的轮廓，并重构嵌套轮廓的整个层次
@@ -144,12 +156,13 @@ vector< vector<Point> > find_obstacle(Mat &depth, int thresh = 150, int max_thre
 	}
 
 	// 绘出轮廓及其凸包
-	Mat drawing = Mat::zeros(threshold_output_gray.size(), CV_8UC3);
+	Mat drawing = Mat::zeros(output.size(), CV_8UC1);
 	for (int i = 0; i < contours.size(); i++) {
 		if (contourArea(contours[i]) < area)//面积小于area的凸包，可忽略
 			continue;
 		result.push_back(hull[i]);
-		Scalar color = Scalar(rng.uniform(0, 255), rng.uniform(0, 255), rng.uniform(0, 255));
+		Scalar color = Scalar(rng.uniform(0, 255), rng.uniform(0, 255), rng.uniform(0, 255));//在0~255随机生成一个整数
+		//Scalar color = Scalar(rng.uniform(0, 255));//在0~255随机生成一个整数
 		drawContours(drawing, contours, i, color, 1, 8, vector<Vec4i>(), 0, Point());
 		drawContours(drawing, hull, i, color, 1, 8, vector<Vec4i>(), 0, Point());
 	}
@@ -208,7 +221,7 @@ int main(int argc, char* argv[]) {
 		Mat colorImage = Mat(Size(cw, ch), CV_8UC3, (void*)colorFrames.get_data());
 		//d435 是RGB模式 而 cv是 BGR模式 ，所以交换一下
 		cvtColor(colorImage, colorImage, cv::COLOR_BGR2RGB);
-		imshow("colorImage", colorImage);
+		//imshow("colorImage", colorImage);
 		
 
 		//获取深度图
@@ -227,7 +240,7 @@ int main(int argc, char* argv[]) {
 		// 从着色的深度数据中创建OpenCV大小（w，h）的OpenCV矩阵
 		Mat depthImage = Mat(Size(dw, dh), CV_8UC3, (void*)color_depth_frames.get_data());//8位三通道
 
-		imshow("depthImage", depthImage);
+		//imshow("depthImage", depthImage);
 
 		////显示图片100ms，若没有下列语句，图像将不能保持
 		//waitKey(100);
